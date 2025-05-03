@@ -1,3 +1,176 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local RuntimeItems = Workspace:WaitForChild("RuntimeItems")
+local PickUpToolRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Tool"):WaitForChild("PickUpTool")
+
+-- Optional filtering by tool names
+local allowedTools = {
+    ["Revolver"] = true,
+    ["Shotgun"] = true,
+    ["Rifle"] = true,
+    ["Navy Revolver"] = true,
+    ["Mauser C96"] = true,
+    ["Bolt Action Rifle"] = true,
+    ["Electrocutioner"] = true,
+    ["Sawed-Off Shotgun"] = true
+}
+
+-- Cache collected tools
+local collected = {}
+
+-- Function to try pickup
+local function tryPickUp(toolModel)
+    if not collected[toolModel] and toolModel:IsA("Model") then
+        if allowedTools[toolModel.Name] or toolModel:FindFirstChild("Handle") then
+            collected[toolModel] = true
+            local args = {toolModel}
+            pcall(
+                function()
+                    PickUpToolRemote:FireServer(unpack(args))
+                end
+            )
+        end
+    end
+end
+
+-- Scan existing tools
+for _, tool in ipairs(RuntimeItems:GetChildren()) do
+    tryPickUp(tool)
+end
+
+-- Watch for new ones
+RuntimeItems.ChildAdded:Connect(
+    function(tool)
+        task.wait(0.1)
+        tryPickUp(tool)
+    end
+)
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local Bond = true
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local remote =
+    ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Network"):WaitForChild("RemotePromise"):WaitForChild(
+    "Remotes"
+):WaitForChild("C_ActivateObject")
+
+local StopEvent = Instance.new("BindableEvent")
+StopEvent.Name = "StopAmmoLoop"
+StopEvent.Parent = ReplicatedStorage
+
+local connections = {} -- Assuming connections table is defined elsewhere
+local stopConn =
+    StopEvent.Event:Connect(
+    function()
+        Bond = false
+    end
+)
+table.insert(connections, stopConn)
+
+local function ammoCollector()
+    if not Bond then
+        return
+    end
+
+    for _, item in pairs(workspace.RuntimeItems:GetChildren()) do
+        if item and item.Name:match("^RevolverAmmo") then
+            local args = {item} -- Pass the item as the argument
+            remote:FireServer(unpack(args))
+        end
+    end
+
+    task.delay(0.1, ammoCollector)
+end
+
+task.spawn(ammoCollector)
+
+local Mstatus = true
+local originalHoldDurations1 = {} -- Store original hold durations only for Moneybag prompts
+local runService = game:GetService("RunService")
+local moneyBagConnections = {} -- Store connections to prevent memory leaks
+
+local function skipHoldPrompt1(prompt)
+    if prompt and prompt:IsA("ProximityPrompt") and prompt.Parent and prompt.Parent.Name == "MoneyBag" then
+        if not originalHoldDurations1[prompt] then
+            originalHoldDurations1[prompt] = prompt.HoldDuration -- Save original hold duration
+        end
+        prompt.HoldDuration = 0 -- Remove hold time for Moneybag prompts only
+    end
+end
+
+local function restoreMoneybagPrompts()
+    for prompt, duration in pairs(originalHoldDurations1) do
+        if prompt and prompt.Parent and prompt.Parent.Name == "MoneyBag" then
+            prompt.HoldDuration = duration -- Restore only Moneybag prompts
+        end
+    end
+    originalHoldDurations1 = {} -- Clear stored values
+end
+
+local function handleMoneyBag(v)
+    if not Mstatus then
+        return
+    end
+    if v:IsA("Model") and v.Name == "Moneybag" and v:FindFirstChild("MoneyBag") then
+        local prompt = v.MoneyBag:FindFirstChildOfClass("ProximityPrompt")
+        if prompt then
+            skipHoldPrompt1(prompt)
+        end
+    end
+end
+
+local function cleanupConnections()
+    for _, connection in pairs(moneyBagConnections) do
+        if connection then
+            connection:Disconnect()
+        end
+    end
+    table.clear(moneyBagConnections)
+end
+
+local function collectMoneyBags()
+    if not Mstatus then
+        return
+    end
+    cleanupConnections() -- Prevent duplicate connections
+
+    -- Scan for existing Moneybags
+    for _, v in ipairs(workspace.RuntimeItems:GetChildren()) do
+        handleMoneyBag(v)
+    end
+
+    -- Auto-collect new Moneybags
+    local connection =
+        runService.Heartbeat:Connect(
+        function()
+            if not Mstatus then
+                return
+            end
+            for _, v in ipairs(workspace.RuntimeItems:GetChildren()) do
+                if v:IsA("Model") and v.Name == "Moneybag" and v:FindFirstChild("MoneyBag") then
+                    local prompt = v.MoneyBag:FindFirstChildOfClass("ProximityPrompt")
+                    if
+                        prompt and
+                            (v.MoneyBag.Position - game.Players.LocalPlayer.Character.HumanoidRootPart.Position).Magnitude <=
+                                prompt.MaxActivationDistance
+                     then
+                        fireproximityprompt(prompt)
+                    end
+                end
+            end
+        end
+    )
+
+    table.insert(moneyBagConnections, connection)
+end
+
+collectMoneyBags()
+
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local nobandagedelay = true
@@ -16,36 +189,7 @@ local player = game.Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local autoCollectDistance = 35
 local hrp = character:WaitForChild("HumanoidRootPart")
-local function getDistance(pos1, pos2)
-    local pos1Vec3 = typeof(pos1) == "CFrame" and pos1.Position or pos1
-    local pos2Vec3 = typeof(pos2) == "CFrame" and pos2.Position or pos2
-    return (pos1Vec3 - pos2Vec3).Magnitude
-end
-local function getClosestAmmo()
-    local itemsFolder = workspace:FindFirstChild("RuntimeItems")
-    if not itemsFolder then
-        return nil
-    end
 
-    local closestAmmo, closestPart
-    local minDistance = math.huge
-
-    for _, model in ipairs(itemsFolder:GetChildren()) do
-        if model:IsA("Model") and model.Name == "RevolverAmmo" then
-            local AmmoPart = model:FindFirstChildWhichIsA("BasePart")
-            if AmmoPart then
-                local distance = (hrp.Position - AmmoPart.Position).Magnitude
-                if distance < minDistance then
-                    minDistance = distance
-                    closestAmmo = model
-                    closestPart = AmmoPart
-                end
-            end
-        end
-    end
-
-    return closestAmmo, closestPart
-end
 if noclip then
     noclipConnection =
         game:GetService("RunService").Stepped:Connect(
@@ -63,71 +207,3 @@ else
         noclipConnection = nil
     end
 end
-RunService.RenderStepped:Connect(
-    function()
-        if nobandagedelay and LocalPlayer.PlayerGui.BandageUse.Enabled and LocalPlayer.Character then
-            local Bandage = LocalPlayer.Character:FindFirstChild("Bandage")
-            if Bandage ~= nil then
-                Bandage.Use:FireServer()
-            end
-        end
-
-        for _, obj in pairs(workspace:GetDescendants()) do
-            if obj:IsA("ProximityPrompt") then
-                obj.HoldDuration = 0
-            end
-        end
-
-        if autoCollect then
-            for _, moneyBag in ipairs(workspace.RuntimeItems:GetChildren()) do
-                if moneyBag:IsA("Model") then
-                    local prompt = moneyBag:FindFirstChild("CollectPrompt", true)
-                    if prompt and prompt:IsA("ProximityPrompt") then
-                        prompt.HoldDuration = 0
-                        prompt:InputHoldBegin()
-                        wait(0.05)
-                        prompt:InputHoldEnd()
-                    end
-                end
-            end
-        end
-
-        if autocollectbandoil then
-            for _, pickbandoil in ipairs(workspace.RuntimeItems:GetChildren()) do
-                if string.find(pickbandoil.Name, "Bandage") then
-                    ReplicatedStorage.Remotes.Tool.PickUpTool:FireServer(workspace.RuntimeItems.Bandage)
-                end
-                if string.find(pickbandoil.Name, "Snake Oil") then
-                    ReplicatedStorage.Remotes.Tool.PickUpTool:FireServer(workspace.RuntimeItems["Snake Oil"])
-                end
-            end
-        end
-
-        if collectammo then
-            if LocalPlayer and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                local playerPosition = LocalPlayer.Character.HumanoidRootPart.Position
-                local model, AmmoPart = getClosestAmmo()
-                if not model or not AmmoPart then
-                    return
-                end
-                local ammoPosition = AmmoPart.Position
-                if getDistance(playerPosition, ammoPosition) <= autoCollectDistance then
-                    game:GetService("ReplicatedStorage").Packages.RemotePromise.Remotes.C_ActivateObject:FireServer(
-                        model
-                    )
-                    task.wait(0.5)
-                end
-            end
-        end
-
-        if autoHeal then
-            local humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
-            if humanoid and humanoid.Health < healThreshold then
-                local bandage = LocalPlayer.Backpack:FindFirstChild("Bandage")
-                if bandage then
-                    bandage.Use:FireServer()
-                end
-            end
-        end
-    end
-)
