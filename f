@@ -1,3 +1,4 @@
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
@@ -170,3 +171,40 @@ local function collectMoneyBags()
 end
 
 collectMoneyBags()
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local nobandagedelay = true
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local autoCollect = true
+local collectammo = true
+local autoHeal = true
+local healThreshold = 40
+game.Players.LocalPlayer.CameraMode = Enum.CameraMode.Classic
+game.Players.LocalPlayer.CameraMaxZoomDistance = 100
+local noclip = true
+local autocollectbandoil = true
+local noclipConnection
+local player = game.Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local autoCollectDistance = 35
+local hrp = character:WaitForChild("HumanoidRootPart")
+
+if noclip then
+    noclipConnection =
+        game:GetService("RunService").Stepped:Connect(
+        function()
+            for _, part in pairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    )
+else
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+end
